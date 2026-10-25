@@ -346,6 +346,7 @@ def get_main_keyboard(user_id):
             # File upload karne aur apni files dekhne ke buttons
             [InlineKeyboardButton(text="💎 📤 Upload File", callback_data="upload_file"),
              InlineKeyboardButton(text="💎 📁 My Files", callback_data="check_files")],
+            [InlineKeyboardButton(text="💎 🚀 My Bots Status", callback_data="my_bots_status")],
             # File search aur bot speed test ke buttons
             [InlineKeyboardButton(text="💎 🔍 Search Files", callback_data="search_files"),
              InlineKeyboardButton(text="💎 ⚡ Bot Speed", callback_data="bot_speed")],
@@ -362,6 +363,7 @@ def get_main_keyboard(user_id):
             # File upload karne aur apni files dekhne ke buttons
             [InlineKeyboardButton(text="💎 📤 Upload File", callback_data="upload_file"),
              InlineKeyboardButton(text="💎 📁 My Files", callback_data="check_files")],
+            [InlineKeyboardButton(text="💎 🚀 My Bots Status", callback_data="my_bots_status")],
             # File search aur bot speed test ke buttons
             [InlineKeyboardButton(text="💎 🔍 Search Files", callback_data="search_files"),
              InlineKeyboardButton(text="💎 ⚡ Bot Speed", callback_data="bot_speed")],
@@ -597,6 +599,78 @@ Upload your first file to get started! 🚀
 
     await callback.message.edit_text(text, reply_markup=back_keyboard, parse_mode="HTML")
     await callback.answer()
+
+@dp.callback_query(F.data == "my_bots_status")
+async def callback_my_bots_status(callback: types.CallbackQuery):
+    """User dashboard: show each runnable uploaded script and let its owner run/stop it."""
+    user_id = callback.from_user.id
+    runnable_files = []
+    for item in user_files.get(user_id, []):
+        try:
+            file_name, file_type = item
+            if str(file_type).lower().lstrip(".") in {"py", "js"}:
+                runnable_files.append(str(file_name))
+        except (TypeError, ValueError):
+            continue
+
+    jobs_by_name = {}
+    try:
+        if WORKER_ENABLED:
+            jobs = (await worker_jobs(user_id)).get("jobs", [])
+            for job in jobs:
+                if job.get("file_name"):
+                    jobs_by_name[job["file_name"]] = job
+        else:
+            for key, info in list(bot_scripts.items()):
+                if info.get("script_owner_id") != user_id:
+                    continue
+                proc = info.get("process")
+                jobs_by_name[info.get("file_name", "")] = {
+                    "running": proc is not None and proc.poll() is None,
+                    "file_name": info.get("file_name", ""),
+                }
+    except WorkerError as exc:
+        await callback.answer(f"⚠️ Worker error: {str(exc)[:120]}", show_alert=True)
+        return
+
+    running_count = sum(1 for j in jobs_by_name.values() if j.get("running"))
+    limit = get_user_running_bot_limit(user_id)
+    limit_text = "Unlimited ♾️" if limit == float("inf") else str(limit)
+    text = (
+        "╔═══════════════════════╗\n"
+        "    🚀 <b>MY BOTS DASHBOARD</b> 🚀\n"
+        "╚═══════════════════════╝\n\n"
+        f"👤 <b>User:</b> <code>{user_id}</code>\n"
+        f"🟢 <b>Running:</b> {running_count}\n"
+        f"📊 <b>Run limit:</b> {limit_text}\n\n"
+    )
+    buttons = []
+    if not runnable_files:
+        text += "📭 No Python/JavaScript scripts found. Upload a .py or .js file first.\n"
+        buttons.append([InlineKeyboardButton(text="💎 📤 Upload File", callback_data="upload_file")])
+    else:
+        for file_name in runnable_files[:30]:
+            job = jobs_by_name.get(file_name, {})
+            is_running = bool(job.get("running"))
+            text += f"{'🟢' if is_running else '⚪'} <code>{file_name}</code> — <b>{'RUNNING' if is_running else 'STOPPED'}</b>\n"
+            key = f"{user_id}_{file_name}"
+            if is_running:
+                buttons.append([
+                    InlineKeyboardButton(text=f"💎 🛑 Stop {file_name[:16]}", callback_data=f"stop_script:{key}"),
+                    InlineKeyboardButton(text=f"💎 📋 Logs", callback_data=f"view_log:{file_name}")
+                ])
+            else:
+                buttons.append([
+                    InlineKeyboardButton(text=f"💎 ▶️ Run {file_name[:16]}", callback_data=f"run_script:{file_name}")
+                ])
+        if len(runnable_files) > 30:
+            text += f"\nShowing first 30 of {len(runnable_files)} runnable files."
+    buttons.append([InlineKeyboardButton(text="💎 🔄 Refresh Status", callback_data="my_bots_status")])
+    buttons.append([InlineKeyboardButton(text="💎 📁 My Files", callback_data="check_files"),
+                    InlineKeyboardButton(text="💎 🏠 Main Menu", callback_data="back_to_main")])
+    await callback.message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+    await callback.answer()
+
 
 @dp.callback_query(F.data == "my_favorites")
 async def callback_my_favorites(callback: types.CallbackQuery):
